@@ -1,9 +1,11 @@
 "use client";
 
 import { useState } from "react";
+import { useSession } from "next-auth/react";
 import PromptInput from "./components/PromptInput";
 import PlatformSelector from "./components/PlatformSelector";
 import PostCard from "./components/PostCard";
+import UserMenu from './components/UserMenu';
 import { Sparkles, AlertCircle, Zap, TrendingUp, Clock, Hash } from "lucide-react";
 
 interface Post {
@@ -14,47 +16,63 @@ interface Post {
 }
 
 export default function Home() {
+  const { data: session } = useSession();
   const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([]);
   const [posts, setPosts] = useState<Post[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
 
   const handleGenerate = async (data: {
-    topic: string;
-    tone: string;
-    targetAudience: string;
-  }) => {
-    if (selectedPlatforms.length === 0) {
-      setError("Please select at least one platform");
-      return;
+  topic: string;
+  tone: string;
+  targetAudience: string;
+}) => {
+  if (selectedPlatforms.length === 0) {
+    setError("Please select at least one platform");
+    return;
+  }
+
+  setIsLoading(true);
+  setError("");
+
+  try {
+    const response = await fetch("/api/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...data,
+        platforms: selectedPlatforms,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error("Failed to generate posts");
     }
 
-    setIsLoading(true);
-    setError("");
+    const result = await response.json();
+    setPosts(result.posts || []);
 
-    try {
-      const response = await fetch("/api/generate", {
+    // Save to database if user is logged in
+    if (session) {
+      await fetch("/api/posts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          ...data,
+          topic: data.topic,
+          tone: data.tone,
+          targetAudience: data.targetAudience,
           platforms: selectedPlatforms,
+          generatedPosts: result.posts,
         }),
       });
-
-      if (!response.ok) {
-        throw new Error("Failed to generate posts");
-      }
-
-      const result = await response.json();
-      setPosts(result.posts || []);
-    } catch (err) {
-      setError("Something went wrong. Please try again.");
-      console.error(err);
-    } finally {
-      setIsLoading(false);
     }
-  };
+  } catch (err) {
+    setError("Something went wrong. Please try again.");
+    console.error(err);
+  } finally {
+    setIsLoading(false);
+  }
+};
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-indigo-50 via-white to-purple-50">
@@ -66,9 +84,9 @@ export default function Home() {
       </div>
 
       <div className="relative container mx-auto px-4 py-12 max-w-5xl">
-        {/* Header with enhanced styling */}
-        <div className="text-center mb-12">
-          <div className="flex items-center justify-center gap-3 mb-6">
+        {/* Header with UserMenu */}
+        <div className="flex items-center justify-between mb-12">
+          <div className="flex items-center gap-3">
             <div className="relative">
               <div className="absolute inset-0 bg-blue-500 rounded-full blur-xl opacity-50 animate-pulse"></div>
               <Sparkles size={50} className="relative text-blue-600 animate-float" />
@@ -82,21 +100,29 @@ export default function Home() {
             </h1>
           </div>
           
-          {/* Stats badges */}
-          <div className="flex flex-wrap justify-center gap-4 mt-4">
-            <div className="glass-effect px-4 py-2 rounded-full text-sm font-medium text-gray-700 flex items-center gap-2">
-              <Zap size={16} className="text-yellow-500" />
-              <span>Powered by Gemini AI</span>
-            </div>
-            <div className="glass-effect px-4 py-2 rounded-full text-sm font-medium text-gray-700 flex items-center gap-2">
-              <TrendingUp size={16} className="text-green-500" />
-              <span>4+ Platforms</span>
-            </div>
-            <div className="glass-effect px-4 py-2 rounded-full text-sm font-medium text-gray-700 flex items-center gap-2">
-              <Clock size={16} className="text-blue-500" />
-              <span>Instant Generation</span>
-            </div>
+          {/* User Menu */}
+          <UserMenu />
+        </div>
+
+        {/* Stats badges */}
+        <div className="flex flex-wrap justify-center gap-4 mt-4 mb-8">
+          <div className="glass-effect px-4 py-2 rounded-full text-sm font-medium text-gray-700 flex items-center gap-2">
+            <Zap size={16} className="text-yellow-500" />
+            <span>Powered by Gemini AI</span>
           </div>
+          <div className="glass-effect px-4 py-2 rounded-full text-sm font-medium text-gray-700 flex items-center gap-2">
+            <TrendingUp size={16} className="text-green-500" />
+            <span>4+ Platforms</span>
+          </div>
+          <div className="glass-effect px-4 py-2 rounded-full text-sm font-medium text-gray-700 flex items-center gap-2">
+            <Clock size={16} className="text-blue-500" />
+            <span>Instant Generation</span>
+          </div>
+          {session && (
+            <div className="bg-green-100 px-4 py-2 rounded-full text-sm font-medium text-green-700 flex items-center gap-2">
+              <span>✓ Signed in as {session.user?.name?.split(' ')[0]}</span>
+            </div>
+          )}
         </div>
 
         {/* Main Form with glass morphism */}
@@ -127,6 +153,11 @@ export default function Home() {
               <span className="bg-blue-100 text-blue-600 px-3 py-1 rounded-full text-sm">
                 {posts.length} {posts.length === 1 ? 'post' : 'posts'}
               </span>
+              {session && (
+                <span className="text-xs text-gray-500 ml-2">
+                  (Saved to your history)
+                </span>
+              )}
             </h2>
             <div className="grid grid-cols-1 gap-6">
               {posts.map((post, index) => (
@@ -148,8 +179,14 @@ export default function Home() {
                   <Sparkles size={24} className="text-white" />
                 </div>
               </div>
-              <h3 className="text-2xl font-bold text-gray-800 mb-2">Ready to create amazing content?</h3>
-              <p className="text-gray-600 mb-4">Enter a topic and select platforms to get started</p>
+              <h3 className="text-2xl font-bold text-gray-800 mb-2">
+                {session ? 'Ready to create amazing content?' : 'Sign in to save your posts!'}
+              </h3>
+              <p className="text-gray-600 mb-4">
+                {session 
+                  ? 'Enter a topic and select platforms to get started' 
+                  : 'Create an account to save your generated posts and access history'}
+              </p>
               <div className="flex flex-wrap justify-center gap-3">
                 <span className="bg-gray-100 px-4 py-2 rounded-full text-sm text-gray-600 flex items-center gap-2">
                   <Hash size={14} /> benefits of learning to code
